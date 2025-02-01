@@ -24,16 +24,15 @@
  * Creation date: 02/01/2025
  */
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 
- #include <stdbool.h>
- #include <stdint.h>
- #include <stdio.h>
-
- #include "hardware/gpio.h"
- #include "hardware/spi.h"
- #include "pico/binary_info.h"
- #include "pico/stdlib.h"
- #include "pico/time.h"
+#include "hardware/gpio.h"
+#include "hardware/spi.h"
+#include "pico/binary_info.h"
+#include "pico/stdlib.h"
+#include "pico/time.h"
 
 #ifndef _CC1101_H
 #define _CC1101_H
@@ -43,12 +42,11 @@
 #define CCPACKET_BUFFER_LEN 64
 #define CCPACKET_DATA_LEN CCPACKET_BUFFER_LEN - 3
 
-#define SS 17
-#define CLK 18
-#define MOSI 19
-#define MISO 16
-#define GDO0 21
-
+#define SS 15
+#define CLK PICO_DEFAULT_SPI_SCK_PIN
+#define MOSI PICO_DEFAULT_SPI_TX_PIN
+#define MISO PICO_DEFAULT_SPI_RX_PIN
+#define GPIO17 17
 
 typedef struct ccpacket_t {
     /**
@@ -76,7 +74,6 @@ typedef struct ccpacket_t {
      */
     unsigned char lqi;
 } CCPACKET;
-
 
 /**
  * Carrier frequencies
@@ -353,11 +350,9 @@ enum RFSTATE { RFSTATE_IDLE = 0, RFSTATE_RX, RFSTATE_TX };
 #define PA_LowPower 0x60
 #define PA_LongDistance 0xC0
 
-
 bool startSPI(void);
 bool digitalWrite(uint8_t pin, bool value);
 bool digitalRead(uint8_t pin);
-
 
 /**
  * writeBurstReg
@@ -387,7 +382,6 @@ void readBurstReg(uint8_t *buffer, uint8_t regAddr, uint8_t len);
  * Set registers from EEPROM
  */
 void setRegsFromEeprom(void);
-
 
 /**
  * cmdStrobe

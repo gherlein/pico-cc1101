@@ -26,6 +26,9 @@
 
 #include "cc1101.h"
 
+#include <pico/time.h>
+#include <stdint.h>
+
 spi_inst_t *spi = spi0;
 
 bool startSPI() {
@@ -51,7 +54,10 @@ bool startSPI() {
     gpio_set_function(MOSI, GPIO_FUNC_SPI);
     gpio_set_function(MISO, GPIO_FUNC_SPI);
 
+    printf("CLK: %d   MOSI:  %d   MISO:  %d\n", CLK, MOSI, MISO);
+
     printf("SPI initialized\n");
+    sleep_ms(10);
     return true;
 }
 
@@ -59,17 +65,25 @@ bool startSPI() {
  * Macros
  */
 // Select (SPI) CC1101
-#define cc1101_Select() digitalWrite(SS, LOW)
+void cc1101_Select() {
+    asm volatile("nop \n nop \n nop");
+    gpio_put(SS, 0);
+    asm volatile("nop \n nop \n nop");
+}
 // Deselect (SPI) CC1101
-#define cc1101_Deselect() digitalWrite(SS, HIGH)
+void cc1101_Deselect() {
+    asm volatile("nop \n nop \n nop");
+    gpio_put(SS, 1);
+    asm volatile("nop \n nop \n nop");
+}
 // Wait until SPI MISO line goes low
-#define wait_Miso() while (digitalRead(MISO) > 0)
+#define wait_Miso() while (gpio_get(MISO) != 0)
 // Get GDO0 pin state
-#define getGDO0state() digitalRead(GDO0)
+#define getGDO0state() digitalRead(GPIO17)
 // Wait until GDO0 line goes high
-#define wait_GDO0_high() while (!getGDO0state())
+#define wait_GDO0_high() while (gpio_get(GPIO17) != 1)
 // Wait until GDO0 line goes low
-#define wait_GDO0_low() while (getGDO0state())
+#define wait_GDO0_low() while (gpio_get(GPIO17) != 0)
 
 bool bitRead(uint8_t *x, char n) { return (*x & (1 << n)) ? 1 : 0; }
 
@@ -85,21 +99,17 @@ uint8_t channel;
 uint8_t syncWord[2];
 uint8_t devAddress;
 
-bool digitalWrite(uint8_t pin, bool value) {
-    gpio_put(pin, value);
-    return true;
-}
-bool digitalRead(uint8_t pin) { return gpio_get(pin); }
-
 /**
  * wakeUp
  *
  * Wake up CC1101 from Power Down state
  */
 void wakeUp(void) {
-    cc1101_Select();    // Select CC1101
+    cc1101_Select();  // Select CC1101
+    sleep_ms(10);
     wait_Miso();        // Wait until MISO goes low
     cc1101_Deselect();  // Deselect CC1101
+    sleep_ms(10);
 }
 
 /**
@@ -156,7 +166,8 @@ void cmdStrobe(uint8_t cmd) {
     wait_Miso();      // Wait until MISO goes low
                       // SPI.transfer(cmd);  // Send strobe command
     int n = spi_write_blocking(spi, &cmd, 1);
-    printf("wrote [%x] %d bytes\n", cmd, n);
+    printf("cmdStrobe: wrote [0x%02X] %d bytes\n", cmd, n);
+    sleep_us(100);
     cc1101_Deselect();  // Deselect CC1101
 }
 
@@ -172,17 +183,20 @@ void cmdStrobe(uint8_t cmd) {
  * 	Data uint8_t returned by the CC1101 IC
  */
 uint8_t readReg(uint8_t regAddr, uint8_t regType) {
-    uint8_t addr, val;
+    uint8_t addr, val = 0xFF;
 
-    addr = regAddr | regType;
+    addr = regAddr | regType | 0x80;
     cc1101_Select();  // Select CC1101
     wait_Miso();      // Wait until MISO goes low
     // SPI.transfer(addr);        // Send register address
     // val = SPI.transfer(0x00);  // Read result
     int num_bytes_read = 0;
-    spi_write_blocking(spi, &addr, 1);
+    int n = spi_write_blocking(spi, &addr, 1);
+    printf("readReg: wrote [0x%02X] (%d) bytes to reg [0x%0X]\n", addr, n, regAddr);
+    // sleep_ms(10);
     spi_read_blocking(spi, 0, &val, 1);
-    printf("read [%x] from reg [%x]\n", val, regAddr);
+    printf("readReg: read [0x%02X] \n", val);
+    sleep_ms(10);
     cc1101_Deselect();  // Deselect CC1101
     // FIXME: This is a hack to get the value out of the buffer
     return val;
@@ -220,20 +234,22 @@ void readBurstReg(uint8_t *buffer, uint8_t regAddr, uint8_t len) {
  */
 void reset(void) {
     cc1101_Deselect();  // Deselect CC1101
-    sleep_us(5);
+    sleep_ms(250);
     cc1101_Select();  // Select CC1101
-    sleep_us(10);
+    sleep_ms(250);
     cc1101_Deselect();  // Deselect CC1101
-    sleep_us(41);
+    sleep_ms(250);
     cc1101_Select();  // Select CC1101
 
     wait_Miso();  // Wait until MISO goes low
                   // SPI.transfer(CC1101_SRES);  // Send reset command strobe
     uint8_t cmd = CC1101_SRES;
     spi_write_blocking(spi, &cmd, 1);
-    wait_Miso();  // Wait until MISO goes low
-
+    wait_Miso();        // Wait until MISO goes low
     cc1101_Deselect();  // Deselect CC1101
+
+    uint8_t val = readStatusReg(CC1101_PARTNUM);
+    printf("Partnum: [0x%02X]\n", val);
 
     setCCregs();  // Reconfigure CC1101
 }
@@ -330,6 +346,8 @@ void init(uint8_t freq, uint8_t mode) {
     startSPI();
     reset();  // Reset CC1101
 
+    // wakeUp();  // Wake up CC1101 from Power Down state
+
     // Configure PATABLE
     setTxPowerAmp(PA_LowPower);
     printf("radio initialized\n");
@@ -414,6 +432,7 @@ void setCarrierFreq(uint8_t freq) {
  * Put CC1101 into power-down state
  */
 void setPowerDownState() {
+    printf("setPowerDownState\n");
     // Comming from RX state, we need to enter the IDLE state first
     cmdStrobe(CC1101_SIDLE);
     // Enter Power-down state
@@ -440,11 +459,22 @@ bool sendData(CCPACKET packet) {
     rfState = RFSTATE_TX;
 
     // Enter RX state
-    setRxState();
+    // testing setRxState();
+
+    printf("sendData\n");
+    if (packet.length > 0) {
+        printf("sendData: is %d bytes\n", packet.length);
+    } else {
+        printf("sendData: is 0 bytes\n");
+    }
 
     int tries = 0;
     // Check that the RX state has been entered
-    while (tries++ < 1000 && ((marcState = readStatusReg(CC1101_MARCSTATE)) & 0x1F) != 0x0D) {
+    // while (tries++ < 1000 && ((marcState = readStatusReg(CC1101_MARCSTATE)) & 0x1F) != 0x0D) {
+#if 0
+    marcState = readStatusReg(CC1101_MARCSTATE);
+    printf("sendData MarcState in RX: [0x%02X]\n", marcState);
+    while (tries++ < 1000 && ((marcState & 0x1F) != 0x0D)) {
         if (marcState == 0x11)  // RX_OVERFLOW
             flushRxFifo();      // flush receive queue
     }
@@ -454,9 +484,10 @@ bool sendData(CCPACKET packet) {
         return false;
     }
 
-    sleep_us(500);
+    // sleep_us(500);
 
     if (packet.length > 0) {
+        printf("sendData: sending %d bytes\n", packet.length);
         // Set data length at the first position of the TX FIFO
         writeReg(CC1101_TXFIFO, packet.length);
         // Write data into the TX FIFO
@@ -465,32 +496,48 @@ bool sendData(CCPACKET packet) {
         // CCA enabled: will enter TX state only if the channel is clear
         setTxState();
     }
-
+#endif
+    setTxState();
+    for (int x = 0; x < packet.length; x++) {
+        printf("%02X ", packet.data[x]);
+    }
+    printf("\n");
     // Check that TX state is being entered (state = RXTX_SETTLING)
-    marcState = readStatusReg(CC1101_MARCSTATE) & 0x1F;
+    marcState = readStatusReg(CC1101_MARCSTATE);
+    printf("sendData MarcState in TX: [0x%02X]\n", marcState);
+
+    marcState = marcState & 0x1F;
     if ((marcState != 0x13) && (marcState != 0x14) && (marcState != 0x15)) {
         setIdleState();  // Enter IDLE state
-        flushTxFifo();   // Flush Tx FIFO
-        setRxState();    // Back to RX state
+        printf("--- flushing the FIFO\n");
+        flushTxFifo();  // Flush Tx FIFO
+        setRxState();   // Back to RX state
 
         // Declare to be in Rx state
         rfState = RFSTATE_RX;
+        printf("--- entering RX state, returning false\n");
         return false;
     }
-
-    // Wait for the sync word to be transmitted
-    wait_GDO0_high();
-
+    // printf("CS off\n");
+    // cc1101_Deselect();
+    //  Wait for the sync word to be transmitted
+    printf("waiting for sync word transmit...\n");
+    // wait_GDO0_high();
+    while (gpio_get(17) != 1) {
+    }
     // Wait until the end of the packet transmission
-    wait_GDO0_low();
-
+    while (gpio_get(17) != 0) {
+    }
     // Check that the TX FIFO is empty
+    printf("checing if the TX FIFO is empty\n");
     if ((readStatusReg(CC1101_TXBYTES) & 0x7F) == 0) res = true;
 
+    printf("sendData: entereting IDLE state\n");
     setIdleState();  // Enter IDLE state
     flushTxFifo();   // Flush Tx FIFO
 
     // Enter back into RX state
+    printf("sendData: entereting RX state\n");
     setRxState();
 
     // Declare to be in Rx state
@@ -549,6 +596,7 @@ uint8_t receiveData(CCPACKET *packet) {
  * Enter Rx state
  */
 void setRxState(void) {
+    printf("setRxState\n");
     cmdStrobe(CC1101_SRX);
     rfState = RFSTATE_RX;
 }
@@ -559,6 +607,7 @@ void setRxState(void) {
  * Enter Tx state
  */
 void setTxState(void) {
+    printf("setting TX State...\n");
     cmdStrobe(CC1101_STX);
     rfState = RFSTATE_TX;
 }
