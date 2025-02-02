@@ -13,7 +13,7 @@ int main() {
 
     printf("started!\n");
 
-    init(CFREQ_915, MODE_LOW_SPEED);
+    init(CFREQ_433, MODE_LOW_SPEED);
     // setSyncWord(syncWord2[0], syncWord2[1]);
     // setCarrierFreq(CFREQ_433);
     // disableAddressCheck();

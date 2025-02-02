@@ -30,6 +30,20 @@
 #include <stdint.h>
 
 spi_inst_t *spi = spi0;
+bool cc1101_rdy;
+uint8_t cc1101_state;
+uint8_t rx_fifo_bytes;
+uint8_t tx_fifo_bytes;
+uint8_t csb;
+
+#define CC1101_STATE_IDLE 0
+#define CC1101_STATE_RX 1
+#define CC1101_STATE_TX 2
+#define CC1101_STATE_FSTXON 3
+#define CC1101_STATE_CALIBRATE 4
+#define CC1101_STATE_SETTLING 5
+#define CC1101_STATE_RX_OVERFLOW 6
+#define CC1101_STATE_TX_UNDERFLOW 7
 
 bool startSPI() {
     // Initialize CS pin high
@@ -112,6 +126,57 @@ void wakeUp(void) {
     sleep_ms(10);
 }
 
+void printState(uint8_t state) {
+    switch (state) {
+        case CC1101_STATE_IDLE:
+            printf("IDLE\n");
+            break;
+        case CC1101_STATE_RX:
+            printf("RX\n");
+            break;
+        case CC1101_STATE_TX:
+            printf("TX\n");
+            break;
+        case CC1101_STATE_FSTXON:
+            printf("FSTXON\n");
+            break;
+        case CC1101_STATE_CALIBRATE:
+            printf("CALIBRATE\n");
+            break;
+        case CC1101_STATE_SETTLING:
+            printf("SETTLING\n");
+            break;
+        case CC1101_STATE_RX_OVERFLOW:
+            printf("RX_OVERFLOW\n");
+            break;
+        case CC1101_STATE_TX_UNDERFLOW:
+            printf("TX_UNDERFLOW\n");
+            break;
+        default:
+            printf("UNKNOWN\n");
+            break;
+    }
+}
+
+void parseCSB(uint8_t csb, uint8_t header) {
+    // printf("parseCSB: [0x%02X]\n", csb);
+    if (csb & 0x80) {
+        cc1101_rdy = 1;
+    } else {
+        (cc1101_rdy = 0);
+    }
+    cc1101_state = (csb >> 4) & 0x08;
+    int8_t bytes = csb & 0x0F;
+    if (header & 0x80) {
+        rx_fifo_bytes = bytes;
+    } else {
+        tx_fifo_bytes = bytes;
+    }
+    // printf("parseCSB: state [0x%02X] rx_fifo_bytes %d tx_fifo_bytes %d\n", cc1101_state, rx_fifo_bytes,
+    // tx_fifo_bytes);
+    printState(cc1101_state);
+}
+
 /**
  * writeReg
  *
@@ -125,8 +190,11 @@ void writeReg(uint8_t regAddr, uint8_t value) {
     wait_Miso();      // Wait until MISO goes low
     // SPI.transfer(regAddr);  // Send register address
     // SPI.transfer(value);    // Send value
-    spi_write_blocking(spi, &regAddr, 1);
-    spi_write_blocking(spi, &value, 1);
+    printf("writeReg: [0x%02X] [0x%02X]\n", regAddr, value);
+    csb = spi_write_read_blocking(spi, &regAddr, &csb, 1);
+    parseCSB(csb, regAddr);
+    cc1101_rdy = spi_write_read_blocking(spi, &value, &csb, 1);
+    parseCSB(csb, value);
     cc1101_Deselect();  // Deselect CC1101
 }
 
@@ -146,10 +214,12 @@ void writeBurstReg(uint8_t regAddr, uint8_t *buffer, uint8_t len) {
     cc1101_Select();               // Select CC1101
     wait_Miso();                   // Wait until MISO goes low
     // SPI.transfer(addr);            // Send register address
-    spi_write_blocking(spi, &regAddr, 1);
+    spi_write_read_blocking(spi, &regAddr, &csb, 1);
+    parseCSB(csb, regAddr);
     for (i = 0; i < len; i++) {
         // SPI.transfer(buffer[i]);  // Send value
-        spi_write_blocking(spi, &buffer[i], 1);
+        spi_write_read_blocking(spi, &buffer[i], &csb, 1);
+        parseCSB(csb, buffer[i]);
     }
     cc1101_Deselect();  // Deselect CC1101
 }
@@ -165,8 +235,9 @@ void cmdStrobe(uint8_t cmd) {
     cc1101_Select();  // Select CC1101
     wait_Miso();      // Wait until MISO goes low
                       // SPI.transfer(cmd);  // Send strobe command
-    int n = spi_write_blocking(spi, &cmd, 1);
+    int n = spi_write_read_blocking(spi, &cmd, &csb, 1);
     printf("cmdStrobe: wrote [0x%02X] %d bytes\n", cmd, n);
+    parseCSB(csb, cmd);
     sleep_us(100);
     cc1101_Deselect();  // Deselect CC1101
 }
@@ -191,12 +262,10 @@ uint8_t readReg(uint8_t regAddr, uint8_t regType) {
     // SPI.transfer(addr);        // Send register address
     // val = SPI.transfer(0x00);  // Read result
     int num_bytes_read = 0;
-    int n = spi_write_blocking(spi, &addr, 1);
+    int n = spi_write_read_blocking(spi, &addr, &val, 1);
     printf("readReg: wrote [0x%02X] (%d) bytes to reg [0x%0X]\n", addr, n, regAddr);
-    // sleep_ms(10);
-    spi_read_blocking(spi, 0, &val, 1);
+    parseCSB(csb, regAddr);
     printf("readReg: read [0x%02X] \n", val);
-    sleep_ms(10);
     cc1101_Deselect();  // Deselect CC1101
     // FIXME: This is a hack to get the value out of the buffer
     return val;
@@ -281,6 +350,7 @@ void setCCregs(void) {
     writeReg(CC1101_FSCTRL0, CC1101_DEFVAL_FSCTRL0);
 
     // Set default carrier frequency = 868 MHz
+    printf("setCarrierFreq: %d\n", carrierFreq);
     setCarrierFreq(carrierFreq);
 
     // RF speed
@@ -497,6 +567,7 @@ bool sendData(CCPACKET packet) {
         setTxState();
     }
 #endif
+
     setTxState();
     for (int x = 0; x < packet.length; x++) {
         printf("%02X ", packet.data[x]);
