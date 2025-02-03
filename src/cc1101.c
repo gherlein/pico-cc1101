@@ -470,6 +470,24 @@ void setChannel(uint8_t chnl) {
  * 'freq'	New carrier frequency
  */
 void setCarrierFreq(uint8_t freq) {
+    uint32_t f = 410000000;
+    uint32_t fs = f / (26000000 / (1 << 16));
+
+    uint8_t f2 = (fs & 0x00FF0000) >> 16;
+    uint8_t f1 = (fs & 0x0000FF00) >> 8;
+    uint8_t f0 = (fs & 0x000000FF);
+
+    printf("f: %02X f2: %02X   f1:  %02X   f0: %02X\n", fs, f2, f1, f0);
+
+    carrierFreq = f;
+    writeReg(CC1101_FREQ2, f2);
+    writeReg(CC1101_FREQ1, f1);
+    writeReg(CC1101_FREQ0, f0);
+
+    // while (1) {
+    // }
+    return;
+#if 1
     switch (freq) {
         case CFREQ_915:
             writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_915);
@@ -494,6 +512,7 @@ void setCarrierFreq(uint8_t freq) {
     }
 
     carrierFreq = freq;
+#endif
 }
 
 /**
