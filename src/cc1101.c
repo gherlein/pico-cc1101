@@ -107,7 +107,7 @@ bool bitRead(uint8_t *x, char n) { return (*x & (1 << n)) ? 1 : 0; }
 // const uint8_t paTable[8] = {0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60};
 
 uint8_t rfState;
-uint8_t carrierFreq;
+uint32_t carrierFreq;
 uint8_t workMode;
 uint8_t channel;
 uint8_t syncWord[2];
@@ -127,6 +127,7 @@ void wakeUp(void) {
 }
 
 void printState(uint8_t state) {
+    return;
     switch (state) {
         case CC1101_STATE_IDLE:
             printf("IDLE\n");
@@ -190,7 +191,7 @@ void writeReg(uint8_t regAddr, uint8_t value) {
     wait_Miso();      // Wait until MISO goes low
     // SPI.transfer(regAddr);  // Send register address
     // SPI.transfer(value);    // Send value
-    printf("writeReg: [0x%02X] [0x%02X]\n", regAddr, value);
+    // printf("writeReg: [0x%02X] [0x%02X]\n", regAddr, value);
     csb = spi_write_read_blocking(spi, &regAddr, &csb, 1);
     parseCSB(csb, regAddr);
     cc1101_rdy = spi_write_read_blocking(spi, &value, &csb, 1);
@@ -236,7 +237,7 @@ void cmdStrobe(uint8_t cmd) {
     wait_Miso();      // Wait until MISO goes low
                       // SPI.transfer(cmd);  // Send strobe command
     int n = spi_write_read_blocking(spi, &cmd, &csb, 1);
-    printf("cmdStrobe: wrote [0x%02X] %d bytes\n", cmd, n);
+    // printf("cmdStrobe: wrote [0x%02X] %d bytes\n", cmd, n);
     parseCSB(csb, cmd);
     sleep_us(100);
     cc1101_Deselect();  // Deselect CC1101
@@ -263,9 +264,9 @@ uint8_t readReg(uint8_t regAddr, uint8_t regType) {
     // val = SPI.transfer(0x00);  // Read result
     int num_bytes_read = 0;
     int n = spi_write_read_blocking(spi, &addr, &val, 1);
-    printf("readReg: wrote [0x%02X] (%d) bytes to reg [0x%0X]\n", addr, n, regAddr);
+    // printf("readReg: wrote [0x%02X] (%d) bytes to reg [0x%0X]\n", addr, n, regAddr);
     parseCSB(csb, regAddr);
-    printf("readReg: read [0x%02X] \n", val);
+    // printf("readReg: read [0x%02X] \n", val);
     cc1101_Deselect();  // Deselect CC1101
     // FIXME: This is a hack to get the value out of the buffer
     return val;
@@ -350,8 +351,8 @@ void setCCregs(void) {
     writeReg(CC1101_FSCTRL0, CC1101_DEFVAL_FSCTRL0);
 
     // Set default carrier frequency = 868 MHz
-    printf("setCarrierFreq: %d\n", carrierFreq);
     setCarrierFreq(carrierFreq);
+    printf("setCarrierFreq: %d\n", carrierFreq);
 
     // RF speed
     if (workMode == MODE_LOW_SPEED)
@@ -404,7 +405,7 @@ void setCCregs(void) {
  * @param freq Carrier frequency
  * @param mode Working mode (speed, ...)
  */
-void init(uint8_t freq, uint8_t mode) {
+void init(uint32_t freq, uint8_t mode) {
     channel = CC1101_DEFVAL_CHANNR;
     syncWord[0] = CC1101_DEFVAL_SYNC1;
     syncWord[1] = CC1101_DEFVAL_SYNC0;
@@ -469,17 +470,21 @@ void setChannel(uint8_t chnl) {
  *
  * 'freq'	New carrier frequency
  */
-void setCarrierFreq(uint8_t freq) {
-    uint32_t f = 410000000;
-    uint32_t fs = f / (26000000 / (1 << 16));
+void setCarrierFreq(uint32_t freq2) {
+    uint32_t freq = 433000000;
+    uint32_t fs = freq / (26000000 / (1 << 16));
+    printf("setCarrierFreq: %ul", fs);
 
-    uint8_t f2 = (fs & 0x00FF0000) >> 16;
-    uint8_t f1 = (fs & 0x0000FF00) >> 8;
-    uint8_t f0 = (fs & 0x000000FF);
+    // uint8_t f2 = (fs & 0x00FF0000) >> 16;
+    // uint8_t f1 = (fs & 0x0000FF00) >> 8;
+    // uint8_t f0 = (fs & 0x000000FF);
+    uint8_t f2 = 0x10;
+    uint8_t f1 = 0xA7;
+    uint8_t f0 = 0x62;
 
     printf("f: %02X f2: %02X   f1:  %02X   f0: %02X\n", fs, f2, f1, f0);
 
-    carrierFreq = f;
+    carrierFreq = freq;
     writeReg(CC1101_FREQ2, f2);
     writeReg(CC1101_FREQ1, f1);
     writeReg(CC1101_FREQ0, f0);
@@ -521,8 +526,8 @@ void setCarrierFreq(uint8_t freq) {
  * Put CC1101 into power-down state
  */
 void setPowerDownState() {
-    printf("setPowerDownState\n");
-    // Comming from RX state, we need to enter the IDLE state first
+    // printf("setPowerDownState\n");
+    //  Comming from RX state, we need to enter the IDLE state first
     cmdStrobe(CC1101_SIDLE);
     // Enter Power-down state
     cmdStrobe(CC1101_SPWD);
@@ -550,11 +555,11 @@ bool sendData(CCPACKET packet) {
     // Enter RX state
     // testing setRxState();
 
-    printf("sendData\n");
+    // printf("sendData\n");
     if (packet.length > 0) {
-        printf("sendData: is %d bytes\n", packet.length);
+        // printf("sendData: is %d bytes\n", packet.length);
     } else {
-        printf("sendData: is 0 bytes\n");
+        // printf("sendData: is 0 bytes\n");
     }
 
     int tries = 0;
@@ -562,21 +567,21 @@ bool sendData(CCPACKET packet) {
     // while (tries++ < 1000 && ((marcState = readStatusReg(CC1101_MARCSTATE)) & 0x1F) != 0x0D) {
 #if 0
     marcState = readStatusReg(CC1101_MARCSTATE);
-    printf("sendData MarcState in RX: [0x%02X]\n", marcState);
+    //printf("sendData MarcState in RX: [0x%02X]\n", marcState);
     while (tries++ < 1000 && ((marcState & 0x1F) != 0x0D)) {
         if (marcState == 0x11)  // RX_OVERFLOW
             flushRxFifo();      // flush receive queue
     }
     if (tries >= 1000) {
         // TODO: MarcState sometimes never enters the expected state; this is a hack workaround.
-        printf("MarcState never entered expected state\n");
+        //printf("MarcState never entered expected state\n");
         return false;
     }
 
     // sleep_us(500);
 
     if (packet.length > 0) {
-        printf("sendData: sending %d bytes\n", packet.length);
+        //printf("sendData: sending %d bytes\n", packet.length);
         // Set data length at the first position of the TX FIFO
         writeReg(CC1101_TXFIFO, packet.length);
         // Write data into the TX FIFO
@@ -589,29 +594,29 @@ bool sendData(CCPACKET packet) {
 
     setTxState();
     for (int x = 0; x < packet.length; x++) {
-        printf("%02X ", packet.data[x]);
+        // printf("%02X ", packet.data[x]);
     }
-    printf("\n");
-    // Check that TX state is being entered (state = RXTX_SETTLING)
+    // printf("\n");
+    //  Check that TX state is being entered (state = RXTX_SETTLING)
     marcState = readStatusReg(CC1101_MARCSTATE);
-    printf("sendData MarcState in TX: [0x%02X]\n", marcState);
+    // printf("sendData MarcState in TX: [0x%02X]\n", marcState);
 
     marcState = marcState & 0x1F;
     if ((marcState != 0x13) && (marcState != 0x14) && (marcState != 0x15)) {
         setIdleState();  // Enter IDLE state
-        printf("--- flushing the FIFO\n");
+        // printf("--- flushing the FIFO\n");
         flushTxFifo();  // Flush Tx FIFO
         setRxState();   // Back to RX state
 
         // Declare to be in Rx state
         rfState = RFSTATE_RX;
-        printf("--- entering RX state, returning false\n");
+        // printf("--- entering RX state, returning false\n");
         return false;
     }
     // printf("CS off\n");
     // cc1101_Deselect();
     //  Wait for the sync word to be transmitted
-    printf("waiting for sync word transmit...\n");
+    // printf("waiting for sync word transmit...\n");
     // wait_GDO0_high();
     while (gpio_get(17) != 1) {
     }
@@ -619,15 +624,15 @@ bool sendData(CCPACKET packet) {
     while (gpio_get(17) != 0) {
     }
     // Check that the TX FIFO is empty
-    printf("checing if the TX FIFO is empty\n");
+    // printf("checing if the TX FIFO is empty\n");
     if ((readStatusReg(CC1101_TXBYTES) & 0x7F) == 0) res = true;
 
-    printf("sendData: entereting IDLE state\n");
+    // printf("sendData: entereting IDLE state\n");
     setIdleState();  // Enter IDLE state
     flushTxFifo();   // Flush Tx FIFO
 
     // Enter back into RX state
-    printf("sendData: entereting RX state\n");
+    // printf("sendData: entereting RX state\n");
     setRxState();
 
     // Declare to be in Rx state
@@ -686,7 +691,7 @@ uint8_t receiveData(CCPACKET *packet) {
  * Enter Rx state
  */
 void setRxState(void) {
-    printf("setRxState\n");
+    // printf("setRxState\n");
     cmdStrobe(CC1101_SRX);
     rfState = RFSTATE_RX;
 }
@@ -697,7 +702,7 @@ void setRxState(void) {
  * Enter Tx state
  */
 void setTxState(void) {
-    printf("setting TX State...\n");
+    // printf("setting TX State...\n");
     cmdStrobe(CC1101_STX);
     rfState = RFSTATE_TX;
 }

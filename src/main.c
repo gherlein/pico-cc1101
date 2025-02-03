@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <math.h>
+#include <pico/time.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,33 +30,46 @@ int main() {
 
     printf("started!\n");
 
-    uint64_t f = 26000000UL / ((1UL << 16) * 433000000UL);
-    // printByteWise(f);
-    f = 26000000UL / ((1UL << 16) * 915000000UL);
-    // printByteWise(f);
-    uint32_t x = 0x0010A762;
-    printf("%ul\n", x);
-    x = 0x00220E0F;
-    printf("%ul\n", x);
-
-    init(CFREQ_433, MODE_LOW_SPEED);
-    // setSyncWord(syncWord2[0], syncWord2[1]);
-    // setCarrierFreq(CFREQ_433);
-    // disableAddressCheck();
-    // setTxPowerAmp(PA_LongDistance);
-
-    const char *message = "hello world";
-    printf("message: %s\n", message);
-    CCPACKET packet;
-    // We also need to include the 0 byte at the end of the string
-    packet.length = strlen(message) + 1;
-    strncpy((char *)packet.data, message, packet.length);
-
+    // uint32_t basefreq = 300000000UL;
+    uint32_t basefreq = 405000000UL;
+    init(basefreq, MODE_LOW_SPEED);
+    uint8_t c = 0;
+    // while (1) {
+    // };
     while (1) {
+        // uint64_t f = 26000000UL / ((1UL << 16) * 433000000UL);
+
+        // setSyncWord(syncWord2[0], syncWord2[1]);
+        // setCarrierFreq(CFREQ_433);
+        // disableAddressCheck();
+        // setTxPowerAmp(PA_LongDistance);
+
+        // uint32_t f = basefreq + (c * 2000000UL);
+        uint32_t f = basefreq + (c * 1000000UL);
+        // setCarrierFreq(f);
+        sleep_ms(10);
+        c++;
+        // if (f > 348000000UL) { f = 348000000UL;   }
+        if (f > 464000000UL) {
+            f = 464000000UL;
+        }
+        // printf("setCarrierFreq: %u\n", f);
+
+        const char *message = "hello world";
+        // printf("message: %s\n", message);
+        CCPACKET packet;
+        // We also need to include the 0 byte at the end of the string
+        packet.length = strlen(message) + 1;
+        strncpy((char *)packet.data, message, packet.length);
+
         printf("sending packet...\n");
-        sendData(packet);
-        sleep_ms(100);
-        printf("sent packet\n");
+        for (int i = 0; i < 10; i++) {
+            printf("%d ", i);
+            sendData(packet);
+            sleep_ms(100);
+            // printf("sent packet\n");
+        }
+        printf("\n");
     }
     // sendData(packet);
 }

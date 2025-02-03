@@ -24,7 +24,6 @@
  * Creation date: 02/01/2025
  */
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -47,6 +46,8 @@
 #define MOSI PICO_DEFAULT_SPI_TX_PIN
 #define MISO PICO_DEFAULT_SPI_RX_PIN
 #define GPIO17 17
+
+#define FREQ_OSC 260000000UL  // crystal osc freq
 
 typedef struct ccpacket_t {
     /**
@@ -444,7 +445,7 @@ void reset(void);
  * @param freq Carrier frequency
  * @param mode Working mode (speed, ...)
  */
-void init(uint8_t freq, uint8_t mode);
+void init(uint32_t freq, uint8_t mode);
 
 /**
  * setSyncWordArray
@@ -471,7 +472,7 @@ void setDevAddress(uint8_t addr);
  *
  * 'freq'	New carrier frequency
  */
-void setCarrierFreq(uint8_t freq);
+void setCarrierFreq(uint32_t freq);
 
 /**
  * setChannel
