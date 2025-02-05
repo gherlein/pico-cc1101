@@ -440,7 +440,7 @@ void setCarrierFreq(uint32_t freq) {
     uint32_t fs = freq / (26000000 / (1 << 16));
     printf("setCarrierFreq: %ul", fs);
 
-#define ALWAYS_433
+// #define ALWAYS_433
 #ifdef ALWAYS_433
     uint8_t f2 = 0x10;
     uint8_t f1 = 0xA7;
@@ -453,9 +453,12 @@ void setCarrierFreq(uint32_t freq) {
     printf("f: %02X f2: %02X   f1:  %02X   f0: %02X\n", fs, f2, f1, f0);
 
     carrierFreq = freq;
-    writeReg(CC1101_FREQ2, f2);
-    writeReg(CC1101_FREQ1, f1);
-    writeReg(CC1101_FREQ0, f0);
+    //  writeReg(CC1101_FREQ2, f2);
+    //  writeReg(CC1101_FREQ1, f1);
+    //  writeReg(CC1101_FREQ0, f0);
+    writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_433);
+    writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_433);
+    writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_433);
 
     // while (1) {
     // }
