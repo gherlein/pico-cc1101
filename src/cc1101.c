@@ -504,8 +504,105 @@ void setPowerDownState() {
     cmdStrobe(CC1101_SPWD);
 }
 
+bool sendData(CCPACKET packet) {
+    uint8_t marcState;
+    bool res = false;
+
+    // Declare to be in Tx state. This will avoid receiving packets whilst
+    // transmitting
+    rfState = RFSTATE_TX;
+
+    // Enter RX state
+    // testing setRxState();
+
+    printf("sendData\n");
+    if (packet.length > 0) {
+        printf("sendData: is %d bytes\n", packet.length);
+    } else {
+        printf("sendData: is 0 bytes\n");
+    }
+
+    int tries = 0;
+    // Check that the RX state has been entered
+    // while (tries++ < 1000 && ((marcState = readStatusReg(CC1101_MARCSTATE)) & 0x1F) != 0x0D) {
+#if 0
+    marcState = readStatusReg(CC1101_MARCSTATE);
+    printf("sendData MarcState in RX: [0x%02X]\n", marcState);
+    while (tries++ < 1000 && ((marcState & 0x1F) != 0x0D)) {
+        if (marcState == 0x11)  // RX_OVERFLOW
+            flushRxFifo();      // flush receive queue
+    }
+    if (tries >= 1000) {
+        // TODO: MarcState sometimes never enters the expected state; this is a hack workaround.
+        printf("MarcState never entered expected state\n");
+        return false;
+    }
+
+    // sleep_us(500);
+
+    if (packet.length > 0) {
+        printf("sendData: sending %d bytes\n", packet.length);
+        // Set data length at the first position of the TX FIFO
+        writeReg(CC1101_TXFIFO, packet.length);
+        // Write data into the TX FIFO
+        writeBurstReg(CC1101_TXFIFO, packet.data, packet.length);
+
+        // CCA enabled: will enter TX state only if the channel is clear
+        setTxState();
+    }
+#endif
+
+    setTxState();
+    for (int x = 0; x < packet.length; x++) {
+        printf("%02X ", packet.data[x]);
+    }
+    printf("\n");
+    // Check that TX state is being entered (state = RXTX_SETTLING)
+    marcState = readStatusReg(CC1101_MARCSTATE);
+    printf("sendData MarcState in TX: [0x%02X]\n", marcState);
+
+    marcState = marcState & 0x1F;
+    if ((marcState != 0x13) && (marcState != 0x14) && (marcState != 0x15)) {
+        setIdleState();  // Enter IDLE state
+        printf("--- flushing the FIFO\n");
+        flushTxFifo();  // Flush Tx FIFO
+        setRxState();   // Back to RX state
+
+        // Declare to be in Rx state
+        rfState = RFSTATE_RX;
+        printf("--- entering RX state, returning false\n");
+        return false;
+    }
+    // printf("CS off\n");
+    // cc1101_Deselect();
+    //  Wait for the sync word to be transmitted
+    printf("waiting for sync word transmit...\n");
+    // wait_GDO0_high();
+    while (gpio_get(17) != 1) {
+    }
+    // Wait until the end of the packet transmission
+    while (gpio_get(17) != 0) {
+    }
+    // Check that the TX FIFO is empty
+    printf("checing if the TX FIFO is empty\n");
+    if ((readStatusReg(CC1101_TXBYTES) & 0x7F) == 0) res = true;
+
+    printf("sendData: entereting IDLE state\n");
+    setIdleState();  // Enter IDLE state
+    flushTxFifo();   // Flush Tx FIFO
+
+    // Enter back into RX state
+    printf("sendData: entereting RX state\n");
+    setRxState();
+
+    // Declare to be in Rx state
+    rfState = RFSTATE_RX;
+
+    return res;
+}
+
 /**
- * sendData
+ * sendData2
  *
  * Send data packet via RF
  *
@@ -515,7 +612,7 @@ void setPowerDownState() {
  *    True if the transmission succeeds
  *    False otherwise
  */
-bool sendData(CCPACKET packet) {
+bool sendData2(CCPACKET packet) {
     uint8_t marcState;
     bool res = false;
     int txfifo;

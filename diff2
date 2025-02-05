@@ -1,0 +1,767 @@
+/**								/**
+ * Copyright (c) 2011 panStamp <contact@panstamp.com>		 * Copyright (c) 2011 panStamp <contact@panstamp.com>
+ * Copyright (c) 2016 Tyler Sommer <contact@tylersommer.pro>	 * Copyright (c) 2016 Tyler Sommer <contact@tylersommer.pro>
+ * Copyright (c) 2025 Greg Herlein <gherlein@herlein.com>	 * Copyright (c) 2025 Greg Herlein <gherlein@herlein.com>
+ *								 *
+ * This file is derived from the CC1101 project.  It's ported	 * This file is derived from the CC1101 project.  It's ported
+ *								 *
+ * CC1101 is free software; you can redistribute it and/or mo	 * CC1101 is free software; you can redistribute it and/or mo
+ * it under the terms of the GNU Lesser General Public Licens	 * it under the terms of the GNU Lesser General Public Licens
+ * the Free Software Foundation; either version 3 of the Lice	 * the Free Software Foundation; either version 3 of the Lice
+ * any later version.						 * any later version.
+ *								 *
+ * CC1101 is distributed in the hope that it will be useful,	 * CC1101 is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warrant	 * but WITHOUT ANY WARRANTY; without even the implied warrant
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See t	 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See t
+ * GNU Lesser General Public License for more details.		 * GNU Lesser General Public License for more details.
+ *								 *
+ * You should have received a copy of the GNU Lesser General 	 * You should have received a copy of the GNU Lesser General 
+ * along with CC1101; if not, write to the Free Software	 * along with CC1101; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 	 * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 
+ * USA								 * USA
+ *								 *
+ * Author: Greg Herlein						 * Author: Greg Herlein
+ * Creation date: 02/01/2025					 * Creation date: 02/01/2025
+ */								 */
+
+#include "cc1101.h"						#include "cc1101.h"
+
+							      >	#include <hardware/spi.h>
+#include <pico/time.h>						#include <pico/time.h>
+#include <stdint.h>						#include <stdint.h>
+
+spi_inst_t *spi = spi0;						spi_inst_t *spi = spi0;
+bool cc1101_rdy;						bool cc1101_rdy;
+uint8_t cc1101_state;						uint8_t cc1101_state;
+uint8_t rx_fifo_bytes;						uint8_t rx_fifo_bytes;
+uint8_t tx_fifo_bytes;						uint8_t tx_fifo_bytes;
+uint8_t csb;							uint8_t csb;
+
+#define CC1101_STATE_IDLE 0					#define CC1101_STATE_IDLE 0
+#define CC1101_STATE_RX 1					#define CC1101_STATE_RX 1
+#define CC1101_STATE_TX 2					#define CC1101_STATE_TX 2
+#define CC1101_STATE_FSTXON 3					#define CC1101_STATE_FSTXON 3
+#define CC1101_STATE_CALIBRATE 4				#define CC1101_STATE_CALIBRATE 4
+#define CC1101_STATE_SETTLING 5					#define CC1101_STATE_SETTLING 5
+#define CC1101_STATE_RX_OVERFLOW 6				#define CC1101_STATE_RX_OVERFLOW 6
+#define CC1101_STATE_TX_UNDERFLOW 7				#define CC1101_STATE_TX_UNDERFLOW 7
+
+bool startSPI() {						bool startSPI() {
+    // Initialize CS pin high					    // Initialize CS pin high
+    gpio_init(SS);						    gpio_init(SS);
+    gpio_set_dir(SS, GPIO_OUT);					    gpio_set_dir(SS, GPIO_OUT);
+    gpio_put(SS, 1);						    gpio_put(SS, 1);
+
+    gpio_set_dir(CC1101_GDO0, GPIO_IN);				    gpio_set_dir(CC1101_GDO0, GPIO_IN);
+
+    // Initialize SPI port at 1 MHz				    // Initialize SPI port at 1 MHz
+    spi_init(spi, 1000 * 1000);					    spi_init(spi, 1000 * 1000);
+
+    // Set SPI format						    // Set SPI format
+    spi_set_format(spi0,  // SPI instance			    spi_set_format(spi0,  // SPI instance
+                   8,     // Number of bits per transfer	                   8,     // Number of bits per transfer
+                   1,     // Polarity (CPOL)			                   1,     // Polarity (CPOL)
+                   1,     // Phase (CPHA)			                   1,     // Phase (CPHA)
+                   SPI_MSB_FIRST);				                   SPI_MSB_FIRST);
+
+    // Initialize SPI pins					    // Initialize SPI pins
+    gpio_set_function(CLK, GPIO_FUNC_SPI);			    gpio_set_function(CLK, GPIO_FUNC_SPI);
+    gpio_set_function(MOSI, GPIO_FUNC_SPI);			    gpio_set_function(MOSI, GPIO_FUNC_SPI);
+    gpio_set_function(MISO, GPIO_FUNC_SPI);			    gpio_set_function(MISO, GPIO_FUNC_SPI);
+
+    printf("CLK: %d   MOSI:  %d   MISO:  %d\n", CLK, MOSI, MI	    printf("CLK: %d   MOSI:  %d   MISO:  %d\n", CLK, MOSI, MI
+
+    printf("SPI initialized\n");				    printf("SPI initialized\n");
+    sleep_ms(10);						    sleep_ms(10);
+    return true;						    return true;
+}								}
+
+/**								/**
+ * Macros							 * Macros
+ */								 */
+// Select (SPI) CC1101						// Select (SPI) CC1101
+void cc1101_Select() {						void cc1101_Select() {
+    asm volatile("nop \n nop \n nop");				    asm volatile("nop \n nop \n nop");
+    gpio_put(SS, 0);						    gpio_put(SS, 0);
+    asm volatile("nop \n nop \n nop");				    asm volatile("nop \n nop \n nop");
+}								}
+// Deselect (SPI) CC1101					// Deselect (SPI) CC1101
+void cc1101_Deselect() {					void cc1101_Deselect() {
+    asm volatile("nop \n nop \n nop");				    asm volatile("nop \n nop \n nop");
+    gpio_put(SS, 1);						    gpio_put(SS, 1);
+    asm volatile("nop \n nop \n nop");				    asm volatile("nop \n nop \n nop");
+}								}
+// Wait until SPI MISO line goes low				// Wait until SPI MISO line goes low
+#define wait_Miso() while (gpio_get(MISO) != 0)			#define wait_Miso() while (gpio_get(MISO) != 0)
+// Get GDO0 pin state						// Get GDO0 pin state
+#define getGDO0state() digitalRead(GPIO17)			#define getGDO0state() digitalRead(GPIO17)
+// Wait until GDO0 line goes high				// Wait until GDO0 line goes high
+#define wait_GDO0_high() while (gpio_get(GPIO17) != 1)		#define wait_GDO0_high() while (gpio_get(GPIO17) != 1)
+// Wait until GDO0 line goes low				// Wait until GDO0 line goes low
+#define wait_GDO0_low() while (gpio_get(GPIO17) != 0)		#define wait_GDO0_low() while (gpio_get(GPIO17) != 0)
+
+bool bitRead(uint8_t *x, char n) { return (*x & (1 << n)) ? 1	bool bitRead(uint8_t *x, char n) { return (*x & (1 << n)) ? 1
+
+/**								/**
+ * PATABLE							 * PATABLE
+ */								 */
+// const uint8_t paTable[8] = {0x60, 0x60, 0x60, 0x60, 0x60, 	// const uint8_t paTable[8] = {0x60, 0x60, 0x60, 0x60, 0x60, 
+
+uint8_t rfState;						uint8_t rfState;
+uint8_t carrierFreq;					      |	uint32_t carrierFreq;
+uint8_t workMode;						uint8_t workMode;
+uint8_t channel;						uint8_t channel;
+uint8_t syncWord[2];						uint8_t syncWord[2];
+uint8_t devAddress;						uint8_t devAddress;
+
+/**								/**
+ * wakeUp							 * wakeUp
+ *								 *
+ * Wake up CC1101 from Power Down state				 * Wake up CC1101 from Power Down state
+ */								 */
+void wakeUp(void) {						void wakeUp(void) {
+    cc1101_Select();  // Select CC1101				    cc1101_Select();  // Select CC1101
+    sleep_ms(10);						    sleep_ms(10);
+    wait_Miso();        // Wait until MISO goes low		    wait_Miso();        // Wait until MISO goes low
+    cc1101_Deselect();  // Deselect CC1101			    cc1101_Deselect();  // Deselect CC1101
+    sleep_ms(10);						    sleep_ms(10);
+}								}
+
+void printState(uint8_t state) {			      <
+    switch (state) {					      <
+        case CC1101_STATE_IDLE:				      <
+            printf("IDLE\n");				      <
+            break;					      <
+        case CC1101_STATE_RX:				      <
+            printf("RX\n");				      <
+            break;					      <
+        case CC1101_STATE_TX:				      <
+            printf("TX\n");				      <
+            break;					      <
+        case CC1101_STATE_FSTXON:			      <
+            printf("FSTXON\n");				      <
+            break;					      <
+        case CC1101_STATE_CALIBRATE:			      <
+            printf("CALIBRATE\n");			      <
+            break;					      <
+        case CC1101_STATE_SETTLING:			      <
+            printf("SETTLING\n");			      <
+            break;					      <
+        case CC1101_STATE_RX_OVERFLOW:			      <
+            printf("RX_OVERFLOW\n");			      <
+            break;					      <
+        case CC1101_STATE_TX_UNDERFLOW:			      <
+            printf("TX_UNDERFLOW\n");			      <
+            break;					      <
+        default:					      <
+            printf("UNKNOWN\n");			      <
+            break;					      <
+    }							      <
+}							      <
+							      <
+void parseCSB(uint8_t csb, uint8_t header) {		      <
+    // printf("parseCSB: [0x%02X]\n", csb);		      <
+    if (csb & 0x80) {					      <
+        cc1101_rdy = 1;					      <
+    } else {						      <
+        (cc1101_rdy = 0);				      <
+    }							      <
+    cc1101_state = (csb >> 4) & 0x08;			      <
+    int8_t bytes = csb & 0x0F;				      <
+    if (header & 0x80) {				      <
+        rx_fifo_bytes = bytes;				      <
+    } else {						      <
+        tx_fifo_bytes = bytes;				      <
+    }							      <
+    // printf("parseCSB: state [0x%02X] rx_fifo_bytes %d tx_f <
+    // tx_fifo_bytes);					      <
+    printState(cc1101_state);				      <
+}							      <
+							      <
+/**								/**
+ * writeReg							 * writeReg
+ *								 *
+ * Write single register into the CC1101 IC via SPI		 * Write single register into the CC1101 IC via SPI
+ *								 *
+ * 'regAddr'	Register address				 * 'regAddr'	Register address
+ * 'value'	Value to be writen				 * 'value'	Value to be writen
+ */								 */
+void writeReg(uint8_t regAddr, uint8_t value) {			void writeReg(uint8_t regAddr, uint8_t value) {
+    cc1101_Select();  // Select CC1101				    cc1101_Select();  // Select CC1101
+    wait_Miso();      // Wait until MISO goes low		    wait_Miso();      // Wait until MISO goes low
+    // SPI.transfer(regAddr);  // Send register address		    // SPI.transfer(regAddr);  // Send register address
+    // SPI.transfer(value);    // Send value			    // SPI.transfer(value);    // Send value
+    printf("writeReg: [0x%02X] [0x%02X]\n", regAddr, value);  |	    // printf("writeReg: [0x%02X] [0x%02X]\n", regAddr, value
+							      >
+    csb = spi_write_read_blocking(spi, &regAddr, &csb, 1);	    csb = spi_write_read_blocking(spi, &regAddr, &csb, 1);
+    parseCSB(csb, regAddr);				      |	    // printf("writeReg: [0x%02X] csb: [0x%02X]\n", regAddr, 
+    cc1101_rdy = spi_write_read_blocking(spi, &value, &csb, 1	    cc1101_rdy = spi_write_read_blocking(spi, &value, &csb, 1
+    parseCSB(csb, value);				      |	    // printf("writeReg: [0x%02X] csb: [0x%02X]\n", value, cs
+							      >	    // parseCSB(csb, value);
+    cc1101_Deselect();  // Deselect CC1101			    cc1101_Deselect();  // Deselect CC1101
+}								}
+
+/**								/**
+ * writeBurstReg						 * writeBurstReg
+ *								 *
+ * Write multiple registers into the CC1101 IC via SPI		 * Write multiple registers into the CC1101 IC via SPI
+ *								 *
+ * 'regAddr'	Register address				 * 'regAddr'	Register address
+ * 'buffer'	Data to be writen				 * 'buffer'	Data to be writen
+ * 'len'	Data length					 * 'len'	Data length
+ */								 */
+void writeBurstReg(uint8_t regAddr, uint8_t *buffer, uint8_t 	void writeBurstReg(uint8_t regAddr, uint8_t *buffer, uint8_t 
+    uint8_t addr, i;						    uint8_t addr, i;
+							      >	    // printf("writeBurstReg: [0x%02X] len: %d\n", regAddr, l
+
+    addr = regAddr | WRITE_BURST;  // Enable burst transfer	    addr = regAddr | WRITE_BURST;  // Enable burst transfer
+    cc1101_Select();               // Select CC1101		    cc1101_Select();               // Select CC1101
+    wait_Miso();                   // Wait until MISO goes lo	    wait_Miso();                   // Wait until MISO goes lo
+    // SPI.transfer(addr);            // Send register addres	    // SPI.transfer(addr);            // Send register addres
+    spi_write_read_blocking(spi, &regAddr, &csb, 1);		    spi_write_read_blocking(spi, &regAddr, &csb, 1);
+    parseCSB(csb, regAddr);				      |
+    for (i = 0; i < len; i++) {					    for (i = 0; i < len; i++) {
+        // SPI.transfer(buffer[i]);  // Send value		        // SPI.transfer(buffer[i]);  // Send value
+        spi_write_read_blocking(spi, &buffer[i], &csb, 1);	        spi_write_read_blocking(spi, &buffer[i], &csb, 1);
+        parseCSB(csb, buffer[i]);			      |	        // parseCSB(csb, buffer[i]);
+    }								    }
+							      >	    //
+							      >	    // int n = spi_write_blocking(spi, buffer, len);
+							      >	    // printf("wrote %d bytes from buffer: %s\n", len, buffer
+    cc1101_Deselect();  // Deselect CC1101			    cc1101_Deselect();  // Deselect CC1101
+}								}
+
+/**								/**
+ * cmdStrobe							 * cmdStrobe
+ *								 *
+ * Send command strobe to the CC1101 IC via SPI			 * Send command strobe to the CC1101 IC via SPI
+ *								 *
+ * 'cmd'	Command strobe					 * 'cmd'	Command strobe
+ */								 */
+void cmdStrobe(uint8_t cmd) {					void cmdStrobe(uint8_t cmd) {
+    cc1101_Select();  // Select CC1101				    cc1101_Select();  // Select CC1101
+    wait_Miso();      // Wait until MISO goes low		    wait_Miso();      // Wait until MISO goes low
+                      // SPI.transfer(cmd);  // Send strobe c	                      // SPI.transfer(cmd);  // Send strobe c
+    int n = spi_write_read_blocking(spi, &cmd, &csb, 1);	    int n = spi_write_read_blocking(spi, &cmd, &csb, 1);
+    printf("cmdStrobe: wrote [0x%02X] %d bytes\n", cmd, n);   |	    // printf("cmdStrobe: wrote [0x%02X] %d bytes\n", cmd, n)
+    parseCSB(csb, cmd);					      |	    //   parseCSB(csb, cmd);
+    sleep_us(100);					      <
+    cc1101_Deselect();  // Deselect CC1101			    cc1101_Deselect();  // Deselect CC1101
+}								}
+
+/**								/**
+ * readReg							 * readReg
+ *								 *
+ * Read CC1101 register via SPI					 * Read CC1101 register via SPI
+ *								 *
+ * 'regAddr'	Register address				 * 'regAddr'	Register address
+ * 'regType'	Type of register: CC1101_CONFIG_REGISTER or C	 * 'regType'	Type of register: CC1101_CONFIG_REGISTER or C
+ *								 *
+ * Return:							 * Return:
+ * 	Data uint8_t returned by the CC1101 IC			 * 	Data uint8_t returned by the CC1101 IC
+ */								 */
+uint8_t readReg(uint8_t regAddr, uint8_t regType) {		uint8_t readReg(uint8_t regAddr, uint8_t regType) {
+    uint8_t addr, val = 0xFF;				      |	    uint8_t addr;
+							      >	    uint8_t val = 0xFF;
+
+    addr = regAddr | regType | 0x80;				    addr = regAddr | regType | 0x80;
+							      >	    // printf("addr: 0x%02X\n", addr);
+							      >
+    cc1101_Select();  // Select CC1101				    cc1101_Select();  // Select CC1101
+    wait_Miso();      // Wait until MISO goes low		    wait_Miso();      // Wait until MISO goes low
+    // SPI.transfer(addr);        // Send register address	    // SPI.transfer(addr);        // Send register address
+    // val = SPI.transfer(0x00);  // Read result		    // val = SPI.transfer(0x00);  // Read result
+    int num_bytes_read = 0;					    int num_bytes_read = 0;
+    int n = spi_write_read_blocking(spi, &addr, &val, 1);     |
+    printf("readReg: wrote [0x%02X] (%d) bytes to reg [0x%0X] |	    int n = spi_write_read_blocking(spi, &addr, &csb, 1);
+    parseCSB(csb, regAddr);				      |	    // printf("readReg: wrote [0x%02X] (%d) bytes to reg [0x%
+    printf("readReg: read [0x%02X] \n", val);		      |	    // printf("csb: [0x%02X] \n", csb);
+    cc1101_Deselect();  // Deselect CC1101		      |	    spi_read_blocking(spi, 0x00, &val, 1);
+    // FIXME: This is a hack to get the value out of the buff |	    // printf("val: [0x%02X]\n", val);
+							      >	    cc1101_Deselect();
+							      >	    // printf("Waiting on MISO...");
+							      >	    wait_Miso();
+							      >	    // printf("done\n");
+    return val;							    return val;
+}								}
+
+/**								/**
+ * readBurstReg							 * readBurstReg
+ *								 *
+ * Read burst data from CC1101 via SPI				 * Read burst data from CC1101 via SPI
+ *								 *
+ * 'buffer'	Buffer where to copy the result to		 * 'buffer'	Buffer where to copy the result to
+ * 'regAddr'	Register address				 * 'regAddr'	Register address
+ * 'len'	Data length					 * 'len'	Data length
+ */								 */
+void readBurstReg(uint8_t *buffer, uint8_t regAddr, uint8_t l	void readBurstReg(uint8_t *buffer, uint8_t regAddr, uint8_t l
+    uint8_t addr, i;						    uint8_t addr, i;
+
+    addr = regAddr | READ_BURST;				    addr = regAddr | READ_BURST;
+    cc1101_Select();  // Select CC1101				    cc1101_Select();  // Select CC1101
+    wait_Miso();      // Wait until MISO goes low		    wait_Miso();      // Wait until MISO goes low
+                      // SPI.transfer(addr);                 	                      // SPI.transfer(addr);                 
+    // for (i = 0; i < len; i++) buffer[i] = SPI.transfer(0x0	    // for (i = 0; i < len; i++) buffer[i] = SPI.transfer(0x0
+    spi_write_blocking(spi, &addr, 1);				    spi_write_blocking(spi, &addr, 1);
+    for (i = 0; i < len; i++) {					    for (i = 0; i < len; i++) {
+        // buffer[i] = SPI.transfer(0x00);			        // buffer[i] = SPI.transfer(0x00);
+        spi_read_blocking(spi, 0, &buffer[i], 1);		        spi_read_blocking(spi, 0, &buffer[i], 1);
+    }								    }
+    cc1101_Deselect();  // Deselect CC1101			    cc1101_Deselect();  // Deselect CC1101
+}								}
+
+/**								/**
+ * reset							 * reset
+ *								 *
+ * Reset CC1101							 * Reset CC1101
+ */								 */
+void reset(void) {						void reset(void) {
+    cc1101_Deselect();  // Deselect CC1101			    cc1101_Deselect();  // Deselect CC1101
+    sleep_ms(250);						    sleep_ms(250);
+    cc1101_Select();  // Select CC1101				    cc1101_Select();  // Select CC1101
+    sleep_ms(250);						    sleep_ms(250);
+    cc1101_Deselect();  // Deselect CC1101			    cc1101_Deselect();  // Deselect CC1101
+    sleep_ms(250);						    sleep_ms(250);
+    cc1101_Select();  // Select CC1101				    cc1101_Select();  // Select CC1101
+
+    wait_Miso();  // Wait until MISO goes low			    wait_Miso();  // Wait until MISO goes low
+                  // SPI.transfer(CC1101_SRES);  // Send rese	                  // SPI.transfer(CC1101_SRES);  // Send rese
+    uint8_t cmd = CC1101_SRES;				      |	    cmdStrobe(CC1101_SRES);
+    spi_write_blocking(spi, &cmd, 1);			      <
+    wait_Miso();        // Wait until MISO goes low		    wait_Miso();        // Wait until MISO goes low
+    cc1101_Deselect();  // Deselect CC1101			    cc1101_Deselect();  // Deselect CC1101
+
+    uint8_t val = readStatusReg(CC1101_PARTNUM);		    uint8_t val = readStatusReg(CC1101_PARTNUM);
+    printf("Partnum: [0x%02X]\n", val);				    printf("Partnum: [0x%02X]\n", val);
+
+    setCCregs();  // Reconfigure CC1101				    setCCregs();  // Reconfigure CC1101
+							      >
+							      >	    setTxState();
+}								}
+
+/**								/**
+ * setCCregs							 * setCCregs
+ *								 *
+ * Configure CC1101 registers					 * Configure CC1101 registers
+ */								 */
+void setCCregs(void) {						void setCCregs(void) {
+    writeReg(CC1101_IOCFG2, CC1101_DEFVAL_IOCFG2);		    writeReg(CC1101_IOCFG2, CC1101_DEFVAL_IOCFG2);
+    writeReg(CC1101_IOCFG1, CC1101_DEFVAL_IOCFG1);		    writeReg(CC1101_IOCFG1, CC1101_DEFVAL_IOCFG1);
+    writeReg(CC1101_IOCFG0, CC1101_DEFVAL_IOCFG0);		    writeReg(CC1101_IOCFG0, CC1101_DEFVAL_IOCFG0);
+    writeReg(CC1101_FIFOTHR, CC1101_DEFVAL_FIFOTHR);		    writeReg(CC1101_FIFOTHR, CC1101_DEFVAL_FIFOTHR);
+    writeReg(CC1101_PKTLEN, CC1101_DEFVAL_PKTLEN);		    writeReg(CC1101_PKTLEN, CC1101_DEFVAL_PKTLEN);
+    writeReg(CC1101_PKTCTRL1, CC1101_DEFVAL_PKTCTRL1);		    writeReg(CC1101_PKTCTRL1, CC1101_DEFVAL_PKTCTRL1);
+    writeReg(CC1101_PKTCTRL0, CC1101_DEFVAL_PKTCTRL0);		    writeReg(CC1101_PKTCTRL0, CC1101_DEFVAL_PKTCTRL0);
+
+    // Set default synchronization word				    // Set default synchronization word
+    setSyncWord(syncWord[0], syncWord[1]);			    setSyncWord(syncWord[0], syncWord[1]);
+
+    // Set default device address				    // Set default device address
+    setDevAddress(devAddress);					    setDevAddress(devAddress);
+
+    // Set default frequency channel				    // Set default frequency channel
+    setChannel(channel);					    setChannel(channel);
+
+    writeReg(CC1101_FSCTRL1, CC1101_DEFVAL_FSCTRL1);		    writeReg(CC1101_FSCTRL1, CC1101_DEFVAL_FSCTRL1);
+    writeReg(CC1101_FSCTRL0, CC1101_DEFVAL_FSCTRL0);		    writeReg(CC1101_FSCTRL0, CC1101_DEFVAL_FSCTRL0);
+
+    // Set default carrier frequency = 868 MHz			    // Set default carrier frequency = 868 MHz
+    printf("setCarrierFreq: %d\n", carrierFreq);	      <
+    setCarrierFreq(carrierFreq);				    setCarrierFreq(carrierFreq);
+							      >	    printf("setCarrierFreq: %d\n", carrierFreq);
+							      >	    setChannel(0);
+
+    // RF speed							    // RF speed
+    if (workMode == MODE_LOW_SPEED)				    if (workMode == MODE_LOW_SPEED)
+        writeReg(CC1101_MDMCFG4, CC1101_DEFVAL_MDMCFG4_4800);	        writeReg(CC1101_MDMCFG4, CC1101_DEFVAL_MDMCFG4_4800);
+    else							    else
+        writeReg(CC1101_MDMCFG4, CC1101_DEFVAL_MDMCFG4_38400)	        writeReg(CC1101_MDMCFG4, CC1101_DEFVAL_MDMCFG4_38400)
+
+    writeReg(CC1101_MDMCFG3, CC1101_DEFVAL_MDMCFG3);		    writeReg(CC1101_MDMCFG3, CC1101_DEFVAL_MDMCFG3);
+    writeReg(CC1101_MDMCFG2, CC1101_DEFVAL_MDMCFG2);		    writeReg(CC1101_MDMCFG2, CC1101_DEFVAL_MDMCFG2);
+    writeReg(CC1101_MDMCFG1, CC1101_DEFVAL_MDMCFG1);		    writeReg(CC1101_MDMCFG1, CC1101_DEFVAL_MDMCFG1);
+    writeReg(CC1101_MDMCFG0, CC1101_DEFVAL_MDMCFG0);		    writeReg(CC1101_MDMCFG0, CC1101_DEFVAL_MDMCFG0);
+    writeReg(CC1101_DEVIATN, CC1101_DEFVAL_DEVIATN);		    writeReg(CC1101_DEVIATN, CC1101_DEFVAL_DEVIATN);
+    writeReg(CC1101_MCSM2, CC1101_DEFVAL_MCSM2);		    writeReg(CC1101_MCSM2, CC1101_DEFVAL_MCSM2);
+    writeReg(CC1101_MCSM1, CC1101_DEFVAL_MCSM1);		    writeReg(CC1101_MCSM1, CC1101_DEFVAL_MCSM1);
+    writeReg(CC1101_MCSM0, CC1101_DEFVAL_MCSM0);		    writeReg(CC1101_MCSM0, CC1101_DEFVAL_MCSM0);
+    writeReg(CC1101_FOCCFG, CC1101_DEFVAL_FOCCFG);		    writeReg(CC1101_FOCCFG, CC1101_DEFVAL_FOCCFG);
+    writeReg(CC1101_BSCFG, CC1101_DEFVAL_BSCFG);		    writeReg(CC1101_BSCFG, CC1101_DEFVAL_BSCFG);
+    writeReg(CC1101_AGCCTRL2, CC1101_DEFVAL_AGCCTRL2);		    writeReg(CC1101_AGCCTRL2, CC1101_DEFVAL_AGCCTRL2);
+    writeReg(CC1101_AGCCTRL1, CC1101_DEFVAL_AGCCTRL1);		    writeReg(CC1101_AGCCTRL1, CC1101_DEFVAL_AGCCTRL1);
+    writeReg(CC1101_AGCCTRL0, CC1101_DEFVAL_AGCCTRL0);		    writeReg(CC1101_AGCCTRL0, CC1101_DEFVAL_AGCCTRL0);
+    writeReg(CC1101_WOREVT1, CC1101_DEFVAL_WOREVT1);		    writeReg(CC1101_WOREVT1, CC1101_DEFVAL_WOREVT1);
+    writeReg(CC1101_WOREVT0, CC1101_DEFVAL_WOREVT0);		    writeReg(CC1101_WOREVT0, CC1101_DEFVAL_WOREVT0);
+    writeReg(CC1101_WORCTRL, CC1101_DEFVAL_WORCTRL);		    writeReg(CC1101_WORCTRL, CC1101_DEFVAL_WORCTRL);
+    writeReg(CC1101_FREND1, CC1101_DEFVAL_FREND1);		    writeReg(CC1101_FREND1, CC1101_DEFVAL_FREND1);
+    writeReg(CC1101_FREND0, CC1101_DEFVAL_FREND0);		    writeReg(CC1101_FREND0, CC1101_DEFVAL_FREND0);
+    writeReg(CC1101_FSCAL3, CC1101_DEFVAL_FSCAL3);		    writeReg(CC1101_FSCAL3, CC1101_DEFVAL_FSCAL3);
+    writeReg(CC1101_FSCAL2, CC1101_DEFVAL_FSCAL2);		    writeReg(CC1101_FSCAL2, CC1101_DEFVAL_FSCAL2);
+    writeReg(CC1101_FSCAL1, CC1101_DEFVAL_FSCAL1);		    writeReg(CC1101_FSCAL1, CC1101_DEFVAL_FSCAL1);
+    writeReg(CC1101_FSCAL0, CC1101_DEFVAL_FSCAL0);		    writeReg(CC1101_FSCAL0, CC1101_DEFVAL_FSCAL0);
+    writeReg(CC1101_RCCTRL1, CC1101_DEFVAL_RCCTRL1);		    writeReg(CC1101_RCCTRL1, CC1101_DEFVAL_RCCTRL1);
+    writeReg(CC1101_RCCTRL0, CC1101_DEFVAL_RCCTRL0);		    writeReg(CC1101_RCCTRL0, CC1101_DEFVAL_RCCTRL0);
+    writeReg(CC1101_FSTEST, CC1101_DEFVAL_FSTEST);		    writeReg(CC1101_FSTEST, CC1101_DEFVAL_FSTEST);
+    writeReg(CC1101_PTEST, CC1101_DEFVAL_PTEST);		    writeReg(CC1101_PTEST, CC1101_DEFVAL_PTEST);
+    writeReg(CC1101_AGCTEST, CC1101_DEFVAL_AGCTEST);		    writeReg(CC1101_AGCTEST, CC1101_DEFVAL_AGCTEST);
+    writeReg(CC1101_TEST2, CC1101_DEFVAL_TEST2);		    writeReg(CC1101_TEST2, CC1101_DEFVAL_TEST2);
+    writeReg(CC1101_TEST1, CC1101_DEFVAL_TEST1);		    writeReg(CC1101_TEST1, CC1101_DEFVAL_TEST1);
+    writeReg(CC1101_TEST0, CC1101_DEFVAL_TEST0);		    writeReg(CC1101_TEST0, CC1101_DEFVAL_TEST0);
+
+    // Send empty packet					    // Send empty packet
+    CCPACKET packet;						    CCPACKET packet;
+    packet.length = 0;						    packet.length = 0;
+    sendData(packet);						    sendData(packet);
+							      >	    printf("sent empty packet\n");
+}								}
+
+/**								/**
+ * init								 * init
+ *								 *
+ * Initialize CC1101 radio					 * Initialize CC1101 radio
+ *								 *
+ * @param freq Carrier frequency				 * @param freq Carrier frequency
+ * @param mode Working mode (speed, ...)			 * @param mode Working mode (speed, ...)
+ */								 */
+void init(uint8_t freq, uint8_t mode) {			      |	void init(uint32_t freq, uint8_t mode) {
+    channel = CC1101_DEFVAL_CHANNR;				    channel = CC1101_DEFVAL_CHANNR;
+    syncWord[0] = CC1101_DEFVAL_SYNC1;				    syncWord[0] = CC1101_DEFVAL_SYNC1;
+    syncWord[1] = CC1101_DEFVAL_SYNC0;				    syncWord[1] = CC1101_DEFVAL_SYNC0;
+    devAddress = CC1101_DEFVAL_ADDR;				    devAddress = CC1101_DEFVAL_ADDR;
+
+    carrierFreq = freq;						    carrierFreq = freq;
+    workMode = mode;						    workMode = mode;
+    // SPI.begin();                  // Initialize SPI interf	    // SPI.begin();                  // Initialize SPI interf
+    startSPI();							    startSPI();
+    reset();  // Reset CC1101					    reset();  // Reset CC1101
+
+    // wakeUp();  // Wake up CC1101 from Power Down state	    // wakeUp();  // Wake up CC1101 from Power Down state
+
+    // Configure PATABLE					    // Configure PATABLE
+    setTxPowerAmp(PA_LowPower);					    setTxPowerAmp(PA_LowPower);
+    printf("radio initialized\n");				    printf("radio initialized\n");
+}								}
+
+/**								/**
+ * setSyncWord							 * setSyncWord
+ *								 *
+ * Set synchronization word					 * Set synchronization word
+ *								 *
+ * 'syncH'	Synchronization word - High uint8_t		 * 'syncH'	Synchronization word - High uint8_t
+ * 'syncL'	Synchronization word - Low uint8_t		 * 'syncL'	Synchronization word - Low uint8_t
+ */								 */
+void setSyncWord(uint8_t syncH, uint8_t syncL) {		void setSyncWord(uint8_t syncH, uint8_t syncL) {
+    writeReg(CC1101_SYNC1, syncH);				    writeReg(CC1101_SYNC1, syncH);
+    writeReg(CC1101_SYNC0, syncL);				    writeReg(CC1101_SYNC0, syncL);
+    syncWord[0] = syncH;					    syncWord[0] = syncH;
+    syncWord[1] = syncL;					    syncWord[1] = syncL;
+}								}
+
+/**								/**
+ * setDevAddress						 * setDevAddress
+ *								 *
+ * Set device address						 * Set device address
+ *								 *
+ * @param addr	Device address					 * @param addr	Device address
+ */								 */
+void setDevAddress(uint8_t addr) {				void setDevAddress(uint8_t addr) {
+    writeReg(CC1101_ADDR, addr);				    writeReg(CC1101_ADDR, addr);
+    devAddress = addr;						    devAddress = addr;
+}								}
+
+/**								/**
+ * setChannel							 * setChannel
+ *								 *
+ * Set frequency channel					 * Set frequency channel
+ *								 *
+ * 'chnl'	Frequency channel				 * 'chnl'	Frequency channel
+ */								 */
+void setChannel(uint8_t chnl) {					void setChannel(uint8_t chnl) {
+    writeReg(CC1101_CHANNR, chnl);				    writeReg(CC1101_CHANNR, chnl);
+    channel = chnl;						    channel = chnl;
+}								}
+
+/**								/**
+ * setCarrierFreq						 * setCarrierFreq
+ *								 *
+ * Set carrier frequency					 * Set carrier frequency
+ *								 *
+ * 'freq'	New carrier frequency				 * 'freq'	New carrier frequency
+ */								 */
+void setCarrierFreq(uint8_t freq) {			      |	void setCarrierFreq(uint32_t freq) {
+							      >	    // uint32_t freq = 433000000;
+							      >	    carrierFreq = freq;
+							      >	    uint32_t fs = freq / (26000000 / (1 << 16));
+							      >	    printf("setCarrierFreq: %ul", fs);
+							      >
+							      >	// #define ALWAYS_433
+							      >	#ifdef ALWAYS_433
+							      >	    uint8_t f2 = 0x10;
+							      >	    uint8_t f1 = 0xA7;
+							      >	    uint8_t f0 = 0x62;
+							      >	#else
+							      >	    uint8_t f2 = (fs & 0x00FF0000) >> 16;
+							      >	    uint8_t f1 = (fs & 0x0000FF00) >> 8;
+							      >	    uint8_t f0 = (fs & 0x000000FF);
+							      >	#endif
+							      >	    printf("f: %02X f2: %02X   f1:  %02X   f0: %02X\n", fs, f
+							      >
+							      >	    carrierFreq = freq;
+							      >	    //  writeReg(CC1101_FREQ2, f2);
+							      >	    //  writeReg(CC1101_FREQ1, f1);
+							      >	    //  writeReg(CC1101_FREQ0, f0);
+							      >	    writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_433);
+							      >	    writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_433);
+							      >	    writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_433);
+							      >
+							      >	    // while (1) {
+							      >	    // }
+							      >	    return;
+							      >	#if 1
+    switch (freq) {						    switch (freq) {
+        case CFREQ_915:						        case CFREQ_915:
+            writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_915);	            writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_915);
+            writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_915);	            writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_915);
+            writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_915);	            writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_915);
+            break;						            break;
+        case CFREQ_433:						        case CFREQ_433:
+            writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_433);	            writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_433);
+            writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_433);	            writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_433);
+            writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_433);	            writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_433);
+            break;						            break;
+        case CFREQ_918:						        case CFREQ_918:
+            writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_918);	            writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_918);
+            writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_918);	            writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_918);
+            writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_918);	            writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_918);
+            break;						            break;
+        default:						        default:
+            writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_868);	            writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_868);
+            writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_868);	            writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_868);
+            writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_868);	            writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_868);
+            break;						            break;
+    }								    }
+
+    carrierFreq = freq;						    carrierFreq = freq;
+							      >	#endif
+}								}
+
+/**								/**
+ * setPowerDownState						 * setPowerDownState
+ *								 *
+ * Put CC1101 into power-down state				 * Put CC1101 into power-down state
+ */								 */
+void setPowerDownState() {					void setPowerDownState() {
+    printf("setPowerDownState\n");				    printf("setPowerDownState\n");
+    // Comming from RX state, we need to enter the IDLE state	    //  Comming from RX state, we need to enter the IDLE stat
+    cmdStrobe(CC1101_SIDLE);					    cmdStrobe(CC1101_SIDLE);
+    // Enter Power-down state					    // Enter Power-down state
+    cmdStrobe(CC1101_SPWD);					    cmdStrobe(CC1101_SPWD);
+}								}
+
+/**								/**
+ * sendData							 * sendData
+ *								 *
+ * Send data packet via RF					 * Send data packet via RF
+ *								 *
+ * 'packet'	Packet to be transmitted. First uint8_t is th	 * 'packet'	Packet to be transmitted. First uint8_t is th
+ *								 *
+ *  Return:							 *  Return:
+ *    True if the transmission succeeds				 *    True if the transmission succeeds
+ *    False otherwise						 *    False otherwise
+ */								 */
+bool sendData(CCPACKET packet) {				bool sendData(CCPACKET packet) {
+    uint8_t marcState;						    uint8_t marcState;
+    bool res = false;						    bool res = false;
+							      >	    int txfifo;
+
+    // Declare to be in Tx state. This will avoid receiving p	    // Declare to be in Tx state. This will avoid receiving p
+    // transmitting						    // transmitting
+    rfState = RFSTATE_TX;					    rfState = RFSTATE_TX;
+
+    // Enter RX state						    // Enter RX state
+    // testing setRxState();				      |	    setRxState();
+							      <
+    printf("sendData\n");				      <
+    if (packet.length > 0) {				      <
+        printf("sendData: is %d bytes\n", packet.length);     <
+    } else {						      <
+        printf("sendData: is 0 bytes\n");		      <
+    }							      <
+
+    int tries = 0;						    int tries = 0;
+    // Check that the RX state has been entered			    // Check that the RX state has been entered
+    // while (tries++ < 1000 && ((marcState = readStatusReg(C |	    while (tries++ < 1000 && ((marcState = readStatusReg(CC11
+#if 0							      <
+    marcState = readStatusReg(CC1101_MARCSTATE);	      <
+    printf("sendData MarcState in RX: [0x%02X]\n", marcState) <
+    while (tries++ < 1000 && ((marcState & 0x1F) != 0x0D)) {  <
+        if (marcState == 0x11)  // RX_OVERFLOW			        if (marcState == 0x11)  // RX_OVERFLOW
+            flushRxFifo();      // flush receive queue		            flushRxFifo();      // flush receive queue
+    }								    }
+    if (tries >= 1000) {					    if (tries >= 1000) {
+        // TODO: MarcState sometimes never enters the expecte	        // TODO: MarcState sometimes never enters the expecte
+        printf("MarcState never entered expected state\n");   <
+        return false;						        return false;
+    }								    }
+							      >	    sleep_us(500);
+
+    // sleep_us(500);					      |	    if (packet.length <= 0) return 0;
+							      |	    //  printf("writing data to radio buffer\n");
+    if (packet.length > 0) {				      <
+        printf("sendData: sending %d bytes\n", packet.length) <
+        // Set data length at the first position of the TX FI	    // Set data length at the first position of the TX FIFO
+        writeReg(CC1101_TXFIFO, packet.length);			    writeReg(CC1101_TXFIFO, packet.length);
+        // Write data into the TX FIFO				    // Write data into the TX FIFO
+        writeBurstReg(CC1101_TXFIFO, packet.data, packet.leng	    writeBurstReg(CC1101_TXFIFO, packet.data, packet.length);
+
+							      >	    txfifo = readStatusReg(CC1101_TXBYTES) & 0x7F;
+							      >	    printf(("bytes in tx fifo: %d\n"), txfifo);
+							      >
+        // CCA enabled: will enter TX state only if the chann	    // CCA enabled: will enter TX state only if the channel i
+							      >	    printf("sending data\n");
+        setTxState();						    setTxState();
+    }							      <
+#endif							      <
+
+    setTxState();					      |	#if 1
+    for (int x = 0; x < packet.length; x++) {		      |	    while (1) {
+        printf("%02X ", packet.data[x]);		      |	        printf(".");
+    }							      |	        sleep_us(500);
+    printf("\n");					      <
+    // Check that TX state is being entered (state = RXTX_SET <
+    marcState = readStatusReg(CC1101_MARCSTATE);		        marcState = readStatusReg(CC1101_MARCSTATE);
+    printf("sendData MarcState in TX: [0x%02X]\n", marcState) |	        // mask upp the upper bits - unused
+							      <
+    marcState = marcState & 0x1F;				        marcState = marcState & 0x1F;
+    if ((marcState != 0x13) && (marcState != 0x14) && (marcSt |	        // printf("sendData MarcState in TX: [0x%02X] csb [0x
+							      >	        //  if ((marcState == 0x13) || (marcState == 0x14) ||
+							      >	        if ((marcState == 0x0D) || (marcState == 0x0E) || (ma
+							      >	            printf("************************************ gack
+        setIdleState();  // Enter IDLE state			            setIdleState();  // Enter IDLE state
+        printf("--- flushing the FIFO\n");		      <
+        flushTxFifo();  // Flush Tx FIFO			            flushTxFifo();   // Flush Tx FIFO
+        setRxState();   // Back to RX state			            setRxState();    // Back to RX state
+							      <
+        // Declare to be in Rx state				                             // Declare to be in Rx state
+        rfState = RFSTATE_RX;					            rfState = RFSTATE_RX;
+        printf("--- entering RX state, returning false\n");   <
+        return false;						            return false;
+							      >	        } else if (marcState == 0x16) {
+							      >	            // TXFIFOUNDERFLOW
+							      >	            printf("***** TXFIFO_UNDERFLOW *****\n");
+							      >	            int txfifo = readStatusReg(CC1101_TXBYTES) & 0x7F
+							      >	            printf(("tx fifo bytes: %d\n"), txfifo);
+							      >	            flushTxFifo();
+							      >	            return false;
+							      >	        } else {
+							      >	            break;
+							      >	        }
+    }								    }
+    // printf("CS off\n");				      |	#endif
+    // cc1101_Deselect();				      |
+    //  Wait for the sync word to be transmitted	      <
+    printf("waiting for sync word transmit...\n");	      <
+    // wait_GDO0_high();				      <
+    while (gpio_get(17) != 1) {					    while (gpio_get(17) != 1) {
+							      >	        // printf("waiting for GDO0 to go high\n");
+    }								    }
+    // Wait until the end of the packet transmission		    // Wait until the end of the packet transmission
+    while (gpio_get(17) != 0) {					    while (gpio_get(17) != 0) {
+    }								    }
+    // Check that the TX FIFO is empty			      |	    sleep_us(500);
+    printf("checing if the TX FIFO is empty\n");	      |	    printf("transmission happened...\n");
+    if ((readStatusReg(CC1101_TXBYTES) & 0x7F) == 0) res = tr <
+							      <
+    printf("sendData: entereting IDLE state\n");	      <
+    setIdleState();  // Enter IDLE state		      <
+    flushTxFifo();   // Flush Tx FIFO			      <
+
+    // Enter back into RX state				      |	    // Check that the TX FIFO is empty
+    printf("sendData: entereting RX state\n");		      |	    // printf("checing if the TX FIFO is empty\n");
+							      >	    txfifo = readStatusReg(CC1101_TXBYTES) & 0x7F;
+							      >	    printf(("tx fifo bytes: %d\n"), txfifo);
+							      >	    if (txfifo == 0) {
+							      >	        res = true;
+							      >	    } else {
+							      >	        printf("flushing TX FIFO\n");
+							      >	        flushTxFifo();
+							      >	        res = false;
+							      >	    }
+							      >	    setIdleState();
+							      >	    flushTxFifo();
+    setRxState();						    setRxState();
+							      <
+    // Declare to be in Rx state			      <
+    rfState = RFSTATE_RX;					    rfState = RFSTATE_RX;
+							      >	    // marcState = readStatusReg(CC1101_MARCSTATE);
+							      >	    //  sleep_ms(250);
+
+    return res;							    return res;
+}								}
+
+/**								/**
+ * receiveData							 * receiveData
+ *								 *
+ * Read data packet from RX FIFO				 * Read data packet from RX FIFO
+ *								 *
+ * 'packet'	Container for the packet received		 * 'packet'	Container for the packet received
+ *								 *
+ * Return:							 * Return:
+ * 	Amount of uint8_ts received				 * 	Amount of uint8_ts received
+ */								 */
+uint8_t receiveData(CCPACKET *packet) {				uint8_t receiveData(CCPACKET *packet) {
+    uint8_t val;						    uint8_t val;
+    uint8_t rxuint8_ts = readStatusReg(CC1101_RXBYTES);		    uint8_t rxuint8_ts = readStatusReg(CC1101_RXBYTES);
+
+    // Any uint8_t waiting to be read and no overflow?		    // Any uint8_t waiting to be read and no overflow?
+    if (rxuint8_ts & 0x7F && !(rxuint8_ts & 0x80)) {		    if (rxuint8_ts & 0x7F && !(rxuint8_ts & 0x80)) {
+        // Read data length					        // Read data length
+        packet->length = readConfigReg(CC1101_RXFIFO);		        packet->length = readConfigReg(CC1101_RXFIFO);
+        // If packet is too long				        // If packet is too long
+        if (packet->length > CCPACKET_DATA_LEN)			        if (packet->length > CCPACKET_DATA_LEN)
+            packet->length = 0;  // Discard packet		            packet->length = 0;  // Discard packet
+        else {							        else {
+            // Read data packet					            // Read data packet
+            readBurstReg(packet->data, CC1101_RXFIFO, packet-	            readBurstReg(packet->data, CC1101_RXFIFO, packet-
+            // Read RSSI					            // Read RSSI
+            packet->rssi = readConfigReg(CC1101_RXFIFO);	            packet->rssi = readConfigReg(CC1101_RXFIFO);
+            // Read LQI and CRC_OK				            // Read LQI and CRC_OK
+            val = readConfigReg(CC1101_RXFIFO);			            val = readConfigReg(CC1101_RXFIFO);
+            packet->lqi = val & 0x7F;				            packet->lqi = val & 0x7F;
+            packet->crc_ok = bitRead(&val, 7);			            packet->crc_ok = bitRead(&val, 7);
+        }							        }
+    } else							    } else
+        packet->length = 0;					        packet->length = 0;
+
+    setIdleState();  // Enter IDLE state			    setIdleState();  // Enter IDLE state
+    flushRxFifo();   // Flush Rx FIFO				    flushRxFifo();   // Flush Rx FIFO
+    // cmdStrobe(CC1101_SCAL);					    // cmdStrobe(CC1101_SCAL);
+
+    // Back to RX state						    // Back to RX state
+    setRxState();						    setRxState();
+
+    return packet->length;					    return packet->length;
+}								}
+
+/**								/**
+ * setRxState							 * setRxState
+ *								 *
+ * Enter Rx state						 * Enter Rx state
+ */								 */
+void setRxState(void) {						void setRxState(void) {
+    printf("setRxState\n");				      |	    // printf("setRxState\n");
+    cmdStrobe(CC1101_SRX);					    cmdStrobe(CC1101_SRX);
+    rfState = RFSTATE_RX;					    rfState = RFSTATE_RX;
+}								}
+
+/**								/**
+ * setTxState							 * setTxState
+ *								 *
+ * Enter Tx state						 * Enter Tx state
+ */								 */
+void setTxState(void) {						void setTxState(void) {
+    printf("setting TX State...\n");			      |	    // printf("setTxState()\n");
+    cmdStrobe(CC1101_STX);					    cmdStrobe(CC1101_STX);
+							      >
+    rfState = RFSTATE_TX;					    rfState = RFSTATE_TX;
+}								}
