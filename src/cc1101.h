@@ -130,9 +130,11 @@ enum RFSTATE { RFSTATE_IDLE = 0, RFSTATE_RX, RFSTATE_TX };
     0x33                 // Calibrate frequency synthesizer and turn it off. SCAL can be strobed from IDLE mode without
                          // setting manual calibration mode (MCSM0.FS_AUTOCAL=0)
 #define CC1101_SRX 0x34  // Enable RX. Perform calibration first if coming from IDLE and MCSM0.FS_AUTOCAL=1
-#define CC1101_STX \
-    0x35                   // In IDLE state: Enable TX. Perform calibration first if MCSM0.FS_AUTOCAL=1.
-                           // If in RX state and CCA is enabled: Only go to TX if channel is clear
+
+// In IDLE state: Enable TX. Perform calibration first if MCSM0.FS_AUTOCAL=1.
+// If in RX state and CCA is enabled: Only go to TX if channel is clear
+#define CC1101_STX 0x35
+
 #define CC1101_SIDLE 0x36  // Exit RX / TX, turn off frequency synthesizer and exit Wake-On-Radio mode if applicable
 #define CC1101_SWOR \
     0x38                     // Start automatic RX polling sequence (Wake-on-Radio) as described in Section 19.5 if

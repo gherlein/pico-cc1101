@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <math.h>
+#include <pico/stdio.h>
 #include <pico/time.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -31,45 +32,23 @@ int main() {
     printf("started!\n");
 
     // uint32_t basefreq = 300000000UL;
-    uint32_t basefreq = 405000000UL;
+    uint32_t basefreq = 433000000UL;
+
     init(basefreq, MODE_LOW_SPEED);
+
     uint8_t c = 0;
-    // while (1) {
-    // };
+    const char *message = "hello world";
+    CCPACKET packet;
+    packet.length = strlen(message) + 1;
+    strncpy((char *)packet.data, message, packet.length);
+
+    disableCCA();
     while (1) {
-        // uint64_t f = 26000000UL / ((1UL << 16) * 433000000UL);
-
-        // setSyncWord(syncWord2[0], syncWord2[1]);
-        // setCarrierFreq(CFREQ_433);
-        // disableAddressCheck();
-        // setTxPowerAmp(PA_LongDistance);
-
-        // uint32_t f = basefreq + (c * 2000000UL);
-        uint32_t f = basefreq + (c * 1000000UL);
-        // setCarrierFreq(f);
-        sleep_ms(10);
+        // uint32_t f = basefreq + (c * 500000UL);
+        //  setCarrierFreq(f);
+        sleep_us(500);
         c++;
-        // if (f > 348000000UL) { f = 348000000UL;   }
-        if (f > 464000000UL) {
-            f = 464000000UL;
-        }
-        // printf("setCarrierFreq: %u\n", f);
-
-        const char *message = "hello world";
-        // printf("message: %s\n", message);
-        CCPACKET packet;
-        // We also need to include the 0 byte at the end of the string
-        packet.length = strlen(message) + 1;
-        strncpy((char *)packet.data, message, packet.length);
-
-        printf("sending packet...\n");
-        for (int i = 0; i < 10; i++) {
-            printf("%d ", i);
-            sendData(packet);
-            sleep_ms(100);
-            // printf("sent packet\n");
-        }
-        printf("\n");
+        printf("%d ", c);
+        sendData(packet);
     }
-    // sendData(packet);
 }
