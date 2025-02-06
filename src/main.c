@@ -46,9 +46,9 @@ int main() {
     while (1) {
         // uint32_t f = basefreq + (c * 500000UL);
         //  setCarrierFreq(f);
-        sleep_ms(100);
         c++;
         printf("%d ", c);
         sendData(packet);
+        sleep_ms(100);
     }
 }

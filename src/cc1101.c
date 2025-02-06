@@ -94,11 +94,11 @@ void cc1101_Deselect() {
 // Wait until SPI MISO line goes low
 #define wait_Miso() while (gpio_get(MISO) != 0)
 // Get GDO0 pin state
-#define getGDO0state() digitalRead(GPIO17)
+#define getGDO0state() digitalRead(CC1101_GDO0)
 // Wait until GDO0 line goes high
-#define wait_GDO0_high() while (gpio_get(GPIO17) != 1)
+#define wait_GDO0_high() while (gpio_get(CC1101_GDO0) != 1)
 // Wait until GDO0 line goes low
-#define wait_GDO0_low() while (gpio_get(GPIO17) != 0)
+#define wait_GDO0_low() while (gpio_get(CC1101_GDO0) != 0)
 
 bool bitRead(uint8_t *x, char n) { return (*x & (1 << n)) ? 1 : 0; }
 
@@ -171,9 +171,12 @@ void writeBurstReg(uint8_t regAddr, uint8_t *buffer, uint8_t len) {
 
     for (i = 0; i < len; i++) {
         // SPI.transfer(buffer[i]);  // Send value
-        spi_write_read_blocking(spi, &buffer[i], &csb, 1);
+        spi_write_read_blocking(spi, &(buffer[i]), &csb, 1);
+        printf("[%02X] ", buffer[i]);
         // parseCSB(csb, buffer[i]);
     }
+    printf("\n");
+
     //
     // int n = spi_write_blocking(spi, buffer, len);
     // printf("wrote %d bytes from buffer: %s\n", len, buffer);
@@ -283,7 +286,8 @@ void reset(void) {
 
     setCCregs();  // Reconfigure CC1101
 
-    setTxState();
+    // this will just start blasting pre-amble
+    // setTxState();
 }
 
 /**
@@ -377,11 +381,9 @@ void init(uint32_t freq, uint8_t mode) {
 
     carrierFreq = freq;
     workMode = mode;
-    // SPI.begin();                  // Initialize SPI interface
     startSPI();
-    reset();  // Reset CC1101
-
-    // wakeUp();  // Wake up CC1101 from Power Down state
+    reset();   // Reset CC1101
+    wakeUp();  // Wake up CC1101 from Power Down state
 
     // Configure PATABLE
     setTxPowerAmp(PA_LowPower);
@@ -435,6 +437,11 @@ void setChannel(uint8_t chnl) {
  * 'freq'	New carrier frequency
  */
 void setCarrierFreq(uint32_t freq) {
+    writeReg(CC1101_FREQ2, CC1101_DEFVAL_FREQ2_433);
+    writeReg(CC1101_FREQ1, CC1101_DEFVAL_FREQ1_433);
+    writeReg(CC1101_FREQ0, CC1101_DEFVAL_FREQ0_433);
+    return;
+
     // uint32_t freq = 433000000;
     carrierFreq = freq;
     uint32_t fs = freq / (26000000 / (1 << 16));
@@ -520,9 +527,11 @@ bool sendData(CCPACKET packet) {
         printf("sendData: is %d bytes\n", packet.length);
     } else {
         printf("sendData: is 0 bytes\n");
+        return false;
+        // commenting this out leaves the transmitter on
     }
 
-    int tries = 0;
+    // int tries = 0;
     // Check that the RX state has been entered
     // while (tries++ < 1000 && ((marcState = readStatusReg(CC1101_MARCSTATE)) & 0x1F) != 0x0D) {
 #if 0
@@ -539,24 +548,27 @@ bool sendData(CCPACKET packet) {
     }
 
     // sleep_us(500);
-
+#endif
     if (packet.length > 0) {
         printf("sendData: sending %d bytes\n", packet.length);
         // Set data length at the first position of the TX FIFO
         writeReg(CC1101_TXFIFO, packet.length);
         // Write data into the TX FIFO
         writeBurstReg(CC1101_TXFIFO, packet.data, packet.length);
-
+        sleep_ms(2);
+        int txfifo = readStatusReg(CC1101_TXBYTES) & 0x7F;
+        printf(("bytes in tx fifo: %d\n"), txfifo);
         // CCA enabled: will enter TX state only if the channel is clear
-        setTxState();
+        // setTxState();
     }
-#endif
 
     setTxState();
     for (int x = 0; x < packet.length; x++) {
         printf("%02X ", packet.data[x]);
     }
     printf("\n");
+    while (1) {
+    }
     // Check that TX state is being entered (state = RXTX_SETTLING)
     marcState = readStatusReg(CC1101_MARCSTATE);
     printf("sendData MarcState in TX: [0x%02X]\n", marcState);
@@ -619,12 +631,21 @@ bool sendData2(CCPACKET packet) {
 
     // Declare to be in Tx state. This will avoid receiving packets whilst
     // transmitting
-    rfState = RFSTATE_TX;
+    // rfState = RFSTATE_TX;
 
     // Enter RX state
-    setRxState();
+    // setRxState();
+    //
+    //
+    printf("sendData\n");
+    if (packet.length > 0) {
+        printf("sendData: is %d bytes\n", packet.length);
+    } else {
+        printf("sendData: is 0 bytes\n");
+    }
 
     int tries = 0;
+#if 0
     // Check that the RX state has been entered
     while (tries++ < 1000 && ((marcState = readStatusReg(CC1101_MARCSTATE)) & 0x1F) != 0x0D) {
         if (marcState == 0x11)  // RX_OVERFLOW
@@ -635,6 +656,7 @@ bool sendData2(CCPACKET packet) {
         return false;
     }
     sleep_us(500);
+#endif
 
     if (packet.length <= 0) return 0;
     //  printf("writing data to radio buffer\n");

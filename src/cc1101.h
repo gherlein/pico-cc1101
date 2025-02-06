@@ -45,7 +45,8 @@
 #define CLK PICO_DEFAULT_SPI_SCK_PIN
 #define MOSI PICO_DEFAULT_SPI_TX_PIN
 #define MISO PICO_DEFAULT_SPI_RX_PIN
-#define GPIO17 17
+// #define GPIO17 17
+#define CC1101_GDO0 17
 
 #define FREQ_OSC 260000000UL  // crystal osc freq
 
@@ -86,7 +87,7 @@ enum CFREQ { CFREQ_868 = 0, CFREQ_915, CFREQ_433, CFREQ_918, CFREQ_LAST };
  */
 enum RFSTATE { RFSTATE_IDLE = 0, RFSTATE_RX, RFSTATE_TX };
 
-#define CC1101_GDO0 2  // GDO0 input interrupt pin
+// #define CC1101_GDO0 2  // GDO0 input interrupt pin
 
 /**
  * Working modes
